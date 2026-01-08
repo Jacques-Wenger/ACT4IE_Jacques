@@ -1,3 +1,6 @@
+import random
+import time
+
 import numpy as np
 from global_parameters import *
 from data_import import *
@@ -92,7 +95,7 @@ def catalogue(choix):
 
 def create_curt_model (elec_grid,thermal_grid,choix=[0]*9,coeff_tload=1.0,
                        coeff_pv_prod=1.0, HP_MAX_ELEC=3000000,
-                       curt=True,storage=False):
+                       curt=True,storage=False,outputFlag=False):
     # Caractéristiques des lignes
     R, X, Lmax, CAPEX = catalogue(choix)
     # topologie reseau de chaleur
@@ -451,7 +454,7 @@ def create_curt_model (elec_grid,thermal_grid,choix=[0]*9,coeff_tload=1.0,
         model.addConstrs((p_th_charge[i, t] == 0 for i in buses for t in setT))
         model.addConstrs((p_th_store[i, t] == 0 for i in buses for t in setT))
 
-    model.setParam('OutputFlag', 1)
+    model.setParam('OutputFlag', outputFlag)
     model.setParam("MIPGap", 0.053)
     model.setParam("NonConvex", 2)
     model.setParam("TimeLimit", 90)
@@ -465,10 +468,10 @@ def create_curt_model (elec_grid,thermal_grid,choix=[0]*9,coeff_tload=1.0,
     return model
 
 def make_fitness_TOTEX(elec_grid,thermal_grid,curt=True,storage=False,coeff_tload=1,coeff_pvprod=1,
-                       HP_MAX_ELEC=3000000):
+                       HP_MAX_ELEC=3000000,outputFlag=False):
     def fitness_fct_wrapper(choix):
         m = create_curt_model(elec_grid,thermal_grid,choix,coeff_tload,
-                              coeff_pvprod,HP_MAX_ELEC,storage)
+                              coeff_pvprod,HP_MAX_ELEC,storage,outputFlag=False)
         m.optimize()
         df = df_from_model(m)
         #OPEX curtailment costs and joule losses
@@ -482,3 +485,78 @@ def make_fitness_TOTEX(elec_grid,thermal_grid,curt=True,storage=False,coeff_tloa
     return fitness_fct_wrapper
 
 
+def simulated_annealing_memory(initial, blackbox, n_vars=9, n_levels=4,
+                               init_temp=200000, final_temp=10000, cooling_rate=0.8,
+                               steps_per_temp=30, max_no_improve=100):
+
+
+    cache = {}  # <---- NEW: stores solution → value
+
+    def evaluate(sol):
+        """Return cached blackbox evaluation."""
+        key = tuple(sol)
+        if key not in cache:
+            cache[key] = blackbox(sol)
+        return cache[key]
+
+    # Initialize
+    current = initial[:]
+    current_val = evaluate(current)
+
+    best = current[:]
+    best_val = current_val
+
+    start_time = time.time()
+    T = init_temp
+    no_improve = 0
+    iteration = 0
+
+    print(f"Initial solution: f={best_val:.3f}, x={current}")
+
+    while T > final_temp and no_improve < max_no_improve:
+        for _ in range(steps_per_temp):
+
+            # Random perturbation
+            candidate = current[:]
+            idx = random.randint(0, n_vars - 1)
+            candidate[idx] = random.randint(0, n_levels - 1)
+
+            # Evaluate using caching
+            candidate_val = evaluate(candidate)
+
+            delta = candidate_val - current_val
+            accept = (delta < 0) or (random.random() < np.exp(-delta / T))
+
+            elapsed = time.time() - start_time
+            minutes = int(elapsed // 60)
+            seconds = int(elapsed % 60)
+
+            if accept:
+                current, current_val = candidate, candidate_val
+
+                if candidate_val < best_val:
+                    best, best_val = candidate[:], candidate_val
+                    no_improve = 0
+                else:
+                    no_improve += 1
+            else:
+                no_improve += 1
+            if best > candidate[:]:
+                print(
+                    f"Iter {iteration:4d} | T={T:.3f} | best={best_val:.3f} | "
+                    f"x={current} | {minutes:02d}min {seconds:02d}s\r"
+                )
+            # else:
+            #     print(
+            #         f"Iter {iteration:4d} | T={T:.3f} | best={best_val:.3f} | "
+            #         f"x={candidate[:]} | {minutes:02d}min {seconds:02d}s\r"
+            #     )
+            iteration += 1
+
+        T *= cooling_rate
+    total_time = time.time() - start_time
+    minutes = int(total_time // 60)
+    seconds = int(total_time % 60)
+    print(f"Optimization finished.Total iter = {iteration}")
+    print(f"Best solution: f={best_val:.3f}, x={best}| {minutes:02d}min {seconds:02d}s\n")
+    return best, float(best_val)
