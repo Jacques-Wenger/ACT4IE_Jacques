@@ -1,14 +1,8 @@
-import os
-
-import numpy as np
-import pandas as pd
-import seaborn as sns
 from optimization import *
 from gurobipy import GRB
 import re
-import csv
 
-from src.mylib.optimization import catalogue
+from optimization import catalogue
 
 
 def natural_sort_key(s):
