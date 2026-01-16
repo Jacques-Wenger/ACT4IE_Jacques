@@ -1,119 +1,41 @@
 import random
-import time
 
-import numpy as np
-from global_parameters import *
+import gurobipy as gp
+from gurobipy import GRB
+
 from data_import import *
 from utils import *
-import gurobipy as gp
+from global_parameters import *
+import time as time
 
-def catalogue(choix):
-    # choix=[liste des choix de lignes]
 
-    # Caractérisitques des renforcements
-    # Liste des résistances/réactances linéques des trois sections alu
-    r_lin = [0.125 /2 ,0.125 /3 ,0.125 /4]
-    # On ajoute les multiples de section max au listes r_list, x_list et s_max
-    x_lin = [0.1, 0.1, 0.1]
-    # Liste des longueurs
-    longueurs = [30, 30, 10, 1, 8, 5, 20, 4, 5]
-    prix_poser = 110000
-    prix_materiau = [ 24, 36, 48]
-    # Liste des résistances/réactances totales initiales en pu
-    r_initial = [0.486533681141036,
-                 0.48935267328094,
-                 0.0626681726907631,
-                 0.02652243752467,
-                 0.0749738690751891,
-                 0.257590457080734,
-                 0.369003788703729,
-                 0.187243746420511,
-                 0.015624999999999998  ]# 8eme renforcee en i = 5
-    x_init = [0.794196331415867,
-              0.793222256649126,
-              0.27492491472259,
-              0.0268822024456043,
-              0.0627791922540079,
-              0.137010845009378,
-              0.170831514968032,
-              0.108669117099955,
-              0.0375  ]# 8eme renforcee en i = 5
-
-    # calcul des couts d'installation des lignes
-    r_tot = []
-    x_tot = []
-    prix_tot = []
-    for j in range(len(longueurs)):
-        tempr = [r_initial[j ] *Zref]
-        tempx = [x_init[j ] *Zref]
-        tempprix = [0]
-        for k in range(len(r_lin)):
-            tempr += [r_lin[k ] *longueurs[j]]
-            tempx += [x_lin[k ] *longueurs[j]]
-            tempprix += [(prix_poser +prix_materiau[k] *1000 ) *longueurs[j]]
-        r_tot += [tempr]
-        x_tot += [tempx]
-        prix_tot += [tempprix]
-
-    # Liste des résistances/réactances totales en pu
-    r_list = [[ j /Zref for j in i] for i in r_tot]
-    x_list = [[ j /Zref for j in i] for i in x_tot]
-
-    # Liste des Imax
-    Imax_list = [405 *2 ,405 *3 ,405 *4]
-    imax_list = [ i /Iref for i in Imax_list]
-
-    L_max = [ i**2 for i in imax_list]
-
-    # Matrice des Lmax: Pour chaque ligne j, L_Matrix[j][0]= Lmax de la ligne initiale
-    Lmax_initial = [0.4191563, 0.4191563,  0.4191563,  0.4191563,
-                    0.62122889, 0.2251666, 0.46418962, 0.2251666,  1.9410062400000005] # 8eme renforcee en i = 5
-
-    L_Matrix = []
-    for j in range(len(longueurs)):
-        L_Matrix += [[Lmax_initial[j]]]
-        L_Matrix[j] += L_max
-
-    # Output: choix des lignes
-    R = []
-    X = []
-    CAPEX = []
-    Lmax = []
-
-    choix_list = []
-    for i in range(len(choix)):
-        choix_list += [int(choix[i])]
-
-    # updated_catalogue = [0,4,5,6]
-    for i in range(len(r_list)):
-        # for i in updated_catalogue:
-        R += [r_list[i][choix_list[i]]]
-        X += [x_list[i][choix_list[i]]]
-        CAPEX += [prix_tot[i][choix_list[i]]]
-        Lmax += [L_Matrix[i][choix_list[i]]]
-    return R, X, Lmax, CAPEX
-
-def create_curt_model (elec_grid,thermal_grid,choix=[0]*9,coeff_tload=1.0,
-                       coeff_pv_prod=1.0, HP_MAX_ELEC=3000000,
-                       curt=True,storage=False,outputFlag=False):
+def create_curt_model (elec_grid, thermal_grid, choix=None, coeff_tload=1.0,
+                       coeff_pvprod=1.0, HP_MAX_ELEC=3000000,
+                       curt=True, storage=False, outputFlag=False):
     # Caractéristiques des lignes
-    R, X, Lmax, CAPEX = catalogue(choix)
-    # topologie reseau de chaleur
-    Bh, tLoadMatrix, thermalGridMatrix, thermalNodesMatrix,thermal_losses_coeffs= thermal_grid
-    alpha_cold_values, beta_cold_values, alpha_hot_values, beta_hot_values = thermal_losses_coeffs
 
+    #print(
+    #    f"coeff_tload={coeff_tload:.2f} | coeff_pv_prod={coeff_pv_prod:.2f} | curt={curt} | storage={storage}")
+
+    if choix is None:
+        choix = [0] * 9
+    R, X, Lmax, CAPEX = reinforcement_details(choix)
+    # topologie reseau de chaleur
+    Bh, tLoadMatrix_import, thermalGridMatrix, thermalNodesMatrix,thermal_losses_coeffs= thermal_grid
+    alpha_cold_values, beta_cold_values, alpha_hot_values, beta_hot_values = thermal_losses_coeffs
+    elec_grid_local = copy.deepcopy(elec_grid)
     B,  elecLoadProfilePMatrix, elecLoadProfileQMatrix, elecProdProfilePMatrix, N = elec_grid
+
     model = gp.Model("thermique")
 
-    setT = range(tLoadMatrix.shape[0])
+    setT = range(tLoadMatrix_import.shape[0])
     # setT = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]
     # time=23
     # setT=[time]
-    buses = range(tLoadMatrix.shape[1])
+    buses = range(tLoadMatrix_import.shape[1])
     thlines = range(thermalGridMatrix.shape[0])
-    nbuses = tLoadMatrix.shape[1]
+    nbuses = tLoadMatrix_import.shape[1]
     nlines = thermalGridMatrix.shape[0]
-    # tLoadMatrix=0.7
     # electrique
     el_lines = B.shape[1]
     el_lines = range(el_lines)
@@ -124,9 +46,10 @@ def create_curt_model (elec_grid,thermal_grid,choix=[0]*9,coeff_tload=1.0,
     ePPMatrix = elecProdProfilePMatrix.T
 
     ###Coeff modulations pv tload
+    tLoadMatrix= copy.deepcopy(tLoadMatrix_import)
     tLoadMatrix = coeff_tload * tLoadMatrix
-    ePPMatrix[9, :] = coeff_pv_prod * ePPMatrix[9, :]
-    ePPMatrix[10, :] = coeff_pv_prod * ePPMatrix[10, :]
+    ePPMatrix[9, :] = coeff_pvprod * ePPMatrix[9, :]
+    ePPMatrix[10, :] = coeff_pvprod * ePPMatrix[10, :]
     # ePPMatrix[9]=0
     # Conversion de B en listes de lignes arrivantes et partantes
     l_in = [[] for _ in buses]
@@ -149,10 +72,6 @@ def create_curt_model (elec_grid,thermal_grid,choix=[0]*9,coeff_tload=1.0,
             if B[i, j] == -1:
                 n_end[j] = i
     Cp = 4180
-    # Pref = 30_000_000
-    # Cp = Cp / 1e6
-    # Pref = Pref / 1e6
-    # tLoadMatrix = tLoadMatrix / 1e6
 
     # nt = tLoadMatrix.shape[0]
     nt = 24
@@ -180,8 +99,6 @@ def create_curt_model (elec_grid,thermal_grid,choix=[0]*9,coeff_tload=1.0,
     discBuses = [12]
     prodBuses = [10, 11]
 
-    thermalbuses = [2, 4, 5, 6, 10, 11, 12]
-
     D_ech = model.addVars(nbuses, nt, lb=-90, ub=80, name="D_ech")
     D_ech.Start = 0
     D_hot = model.addVars(nlines, nt, lb=0, ub=200, name="D_hot")
@@ -207,27 +124,22 @@ def create_curt_model (elec_grid,thermal_grid,choix=[0]*9,coeff_tload=1.0,
     p_th_gen = model.addVars(len(buses), nt, lb=0, ub=1, name="p_th_gen")
     p_th_gen.Start = 1 / 2
 
-    p_th_charge = model.addVars(nbuses, nt, lb=0, ub=1, name="p_th_charge")
-    p_th_charge.Start = 0
 
-    p_th_store = model.addVars(nbuses, nt, lb=0, ub=1, name="p_th_store")
-    p_th_store.Start = 0
 
     p_th_inj = model.addVars(nbuses, nt, lb=0, ub=1, name="p_th_inj")
     p_th_inj.Start = 0
 
     epsilon = model.addVar(lb=0, ub=1, name="epsilon")
 
-    # total_pv_prod=0
-    # for i in [9,10]:
-    #     for t in setT:
-    #         total_pv_prod+=ePPMatrix[i,t]
+    p_th_charge = model.addVars(nbuses, nt, lb=0, ub=1, name="p_th_charge")
+    p_th_charge.Start = 0
+
+    p_th_store = model.addVars(nbuses, nt, lb=0, ub=1, name="p_th_store")
+    p_th_store.Start = 0
 
     Cost_curt = 0.083
-    # model.setObjective(gp.quicksum(p_th_gen[i,t] for i in [11] for t in setT))
-    Cost_joules = 0.1  # /kWh
     model.setObjective(gp.quicksum(
-        ePPMatrix[i, t] - P_gen[i, t] for i in [9, 10] for t in setT) * 365 * 30000 * Cost_curt + epsilon * 100000
+        ePPMatrix[i, t] - P_gen[i, t] for i in [9, 10] for t in setT) * 365 * 30000 * Cost_curt + epsilon * 100000000
                        )
 
     # Matrice d'incidence du réseau chaud
@@ -355,12 +267,11 @@ def create_curt_model (elec_grid,thermal_grid,choix=[0]*9,coeff_tload=1.0,
     model.addConstrs(p_th_gen[i, t] == 0 for i in clientBuses for t in setT)
     model.addConstrs(p_th_gen[i, t] == 0 for i in discBuses for t in setT)
     model.addConstrs(p_th_gen[i, t] == 0 for i in [0, 1, 2, 3, 4, 7, 9, 8] for t in setT)
+
     # reglage des echangeurs
     model.addConstrs(T_ech_hot[i, t] == 95 for i in prodBuses for t in setT)
     model.addConstrs(T_ech_cold[i, t] == 40 for i in clientBuses for t in setT)
 
-    # Q_gen=model.addVars(nbuses,nt,lb=0,ub=2,name="Nodal_Q_slack")
-    # print(ePPMatrix[11, :])
     slack = [0, 1, 8]
     non_slack = [2, 3, 4, 5, 6, 7, 9, 10, 11, 12]
 
@@ -422,10 +333,6 @@ def create_curt_model (elec_grid,thermal_grid,choix=[0]*9,coeff_tload=1.0,
     model.addConstrs((Hp_P[i, t] <= HP_MAX_ELEC /
                       Pref for i in HP for t in setT), name="heat_pump_max_P")
 
-    # model.setParam('TimeLimit', 20)
-    # model.setParam('MaxC')
-    # model.setParam("MIPGap", 0.039)
-    # model.setParam('Threads', 8)
     model.addConstrs(p_th_gen[11, t] >= 0.096 for t in setT)
 
     store_nodes = [10]
@@ -436,7 +343,7 @@ def create_curt_model (elec_grid,thermal_grid,choix=[0]*9,coeff_tload=1.0,
     eff1 = 0.9
     eff2 = 0.9
 
-    if storage:
+    if storage==True:
         E_store = model.addVars(nbuses, nt, lb=0, ub=1, name="E_stor")
         E_store.Start = 0
         model.addConstrs((p_th_gen[i, t] == p_th_inj[i, t] + p_th_charge[i, t] for i in buses for t in setT))
@@ -451,6 +358,7 @@ def create_curt_model (elec_grid,thermal_grid,choix=[0]*9,coeff_tload=1.0,
         model.addConstrs((E_store[i, 23] == 0.2) for i in store_nodes)
         model.addConstrs((E_store[i, t] == 0) for i in non_stor for t in setT)
     else:
+        model.addConstrs((p_th_gen[i, t] == p_th_inj[i, t] for i in buses for t in setT))
         model.addConstrs((p_th_charge[i, t] == 0 for i in buses for t in setT))
         model.addConstrs((p_th_store[i, t] == 0 for i in buses for t in setT))
 
@@ -470,26 +378,36 @@ def create_curt_model (elec_grid,thermal_grid,choix=[0]*9,coeff_tload=1.0,
 def make_fitness_TOTEX(elec_grid,thermal_grid,curt=True,storage=False,coeff_tload=1,coeff_pvprod=1,
                        HP_MAX_ELEC=3000000,outputFlag=False):
     def fitness_fct_wrapper(choix):
-        m = create_curt_model(elec_grid,thermal_grid,choix,coeff_tload,
-                              coeff_pvprod,HP_MAX_ELEC,storage,outputFlag=False)
+        m = create_curt_model(elec_grid=elec_grid,
+                              thermal_grid=thermal_grid,
+                              choix=choix,
+                              coeff_tload=coeff_tload,
+                              coeff_pvprod=coeff_pvprod,
+                              HP_MAX_ELEC=HP_MAX_ELEC,
+                              storage=storage,
+                              outputFlag=False)
+
         m.optimize()
-        df = df_from_model(m)
-        #OPEX curtailment costs and joule losses
-        joule = joule_from_df(df,choix)
-        curt = curt_from_df(df,choix,coeff_pvprod)
-        #CAPEX
-        capex = capex_from_x(choix)
-        #TOTEX
-        totex = joule + curt + capex
+        if m.status == GRB.OPTIMAL:
+            df_model = df_from_model(m)
+            #OPEX curtailment costs and joule losses
+            joule = joule_from_df(df_model,choix)
+            curt_local = curt_from_df(df_model,choix,coeff_pvprod)
+            #CAPEX
+            capex = capex_from_x(choix)
+            #TOTEX
+            totex = joule + curt_local + capex
+        else:
+            totex = 10_000_000_000
         return totex
     return fitness_fct_wrapper
 
 
 def simulated_annealing_memory(initial, blackbox, n_vars=9, n_levels=4,
-                               init_temp=200000, final_temp=10000, cooling_rate=0.8,
-                               steps_per_temp=30, max_no_improve=100):
+                                   init_temp=200000, final_temp=10000, cooling_rate=0.8,
+                                   steps_per_temp=30, max_no_improve=100):
 
-
+    random.seed(time.time_ns()) # Ensure a fresh seed for every call
     cache = {}  # <---- NEW: stores solution → value
 
     def evaluate(sol):
@@ -541,16 +459,12 @@ def simulated_annealing_memory(initial, blackbox, n_vars=9, n_levels=4,
                     no_improve += 1
             else:
                 no_improve += 1
-            if best > candidate[:]:
+                
+            if iteration % 10 == 0: # Log every 10 iterations instead of using a broken list comparison
                 print(
                     f"Iter {iteration:4d} | T={T:.3f} | best={best_val:.3f} | "
                     f"x={current} | {minutes:02d}min {seconds:02d}s\r"
                 )
-            # else:
-            #     print(
-            #         f"Iter {iteration:4d} | T={T:.3f} | best={best_val:.3f} | "
-            #         f"x={candidate[:]} | {minutes:02d}min {seconds:02d}s\r"
-            #     )
             iteration += 1
 
         T *= cooling_rate
@@ -560,3 +474,65 @@ def simulated_annealing_memory(initial, blackbox, n_vars=9, n_levels=4,
     print(f"Optimization finished.Total iter = {iteration}")
     print(f"Best solution: f={best_val:.3f}, x={best}| {minutes:02d}min {seconds:02d}s\n")
     return best, float(best_val)
+
+import time
+import copy
+
+def sensitivity_analysis(elec_grid, thermal_grid, curt_bool=True, storage_bool=False):
+    start_time = time.time()
+
+
+
+    coeff_list = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6]
+
+    nb_coeffs = len(coeff_list) * len(coeff_list)
+    HP_ELEC = 3_000_000
+
+    result_matrix = []
+    flag = 0
+
+    for coeff_pv_prod in coeff_list:
+        result_list = []
+
+        for coeff_tload in coeff_list:
+            flag += 1
+            print(f"{flag} sur 144")
+
+
+
+            f_local = make_fitness_TOTEX(
+                elec_grid,
+                thermal_grid,
+                curt=curt_bool,
+                storage=storage_bool,
+                coeff_tload=coeff_tload,
+                coeff_pvprod=coeff_pv_prod,
+                HP_MAX_ELEC=HP_ELEC
+            )
+            print (thermal_grid[1][5][5])
+            result = (
+                (coeff_tload, coeff_pv_prod),
+                simulated_annealing_memory(
+                    [0] * 9,
+                    f_local,
+                    n_vars=9,
+                    n_levels=4,
+                    init_temp=200_000,
+                    final_temp=10_000,
+                    cooling_rate=0.8,
+                    steps_per_temp=30,
+                    max_no_improve=100
+                )
+            )
+
+            result_list.append(result)
+
+        result_matrix += [result_list]
+
+    total_time = time.time() - start_time
+    minutes = int(total_time // 60)
+    seconds = int(total_time % 60)
+
+    print(f"Sensitivity analyisis finished {minutes:02d}min {seconds:02d}s\n")
+
+    return result_matrix

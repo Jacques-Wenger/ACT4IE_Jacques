@@ -1,8 +1,98 @@
-from optimization import *
+import os
+from global_parameters import *
+import numpy as np
+import seaborn as sns
+# from optimization import *
 from gurobipy import GRB
 import re
+import pandas as pd
+from data_import import  *
 
-from optimization import catalogue
+def reinforcement_details(choix):
+    # choix=[liste des choix de lignes]
+
+    # Caractérisitques des renforcements
+    # Liste des résistances/réactances linéques des trois sections alu
+    r_lin = [0.125 /2 ,0.125 /3 ,0.125 /4]
+    # On ajoute les multiples de section max au listes r_list, x_list et s_max
+    x_lin = [0.1, 0.1, 0.1]
+    # Liste des longueurs
+    longueurs = [30, 30, 10, 1, 8, 5, 20, 4, 5]
+    prix_poser = 110000
+    prix_materiau = [ 24, 36, 48]
+    # Liste des résistances/réactances totales initiales en pu
+    r_initial = [0.486533681141036,
+                 0.48935267328094,
+                 0.0626681726907631,
+                 0.02652243752467,
+                 0.0749738690751891,
+                 0.257590457080734,
+                 0.369003788703729,
+                 0.187243746420511,
+                 0.015624999999999998  ]# 8eme renforcee en i = 5
+    x_init = [0.794196331415867,
+              0.793222256649126,
+              0.27492491472259,
+              0.0268822024456043,
+              0.0627791922540079,
+              0.137010845009378,
+              0.170831514968032,
+              0.108669117099955,
+              0.0375  ]# 8eme renforcee en i = 5
+
+    # calcul des couts d'installation des lignes
+    r_tot = []
+    x_tot = []
+    prix_tot = []
+    for j in range(len(longueurs)):
+        tempr = [r_initial[j ] *Zref]
+        tempx = [x_init[j ] *Zref]
+        tempprix = [0]
+        for k in range(len(r_lin)):
+            tempr += [r_lin[k ] *longueurs[j]]
+            tempx += [x_lin[k ] *longueurs[j]]
+            tempprix += [(prix_poser +prix_materiau[k] *1000 ) *longueurs[j]]
+        r_tot += [tempr]
+        x_tot += [tempx]
+        prix_tot += [tempprix]
+
+    # Liste des résistances/réactances totales en pu
+    r_list = [[ j /Zref for j in i] for i in r_tot]
+    x_list = [[ j /Zref for j in i] for i in x_tot]
+
+    # Liste des Imax
+    Imax_list = [405 *2 ,405 *3 ,405 *4]
+    imax_list = [ i /Iref for i in Imax_list]
+
+    L_max = [ i**2 for i in imax_list]
+
+    # Matrice des Lmax: Pour chaque ligne j, L_Matrix[j][0]= Lmax de la ligne initiale
+    Lmax_initial = [0.4191563, 0.4191563,  0.4191563,  0.4191563,
+                    0.62122889, 0.2251666, 0.46418962, 0.2251666,  1.9410062400000005] # 8eme renforcee en i = 5
+
+    L_Matrix = []
+    for j in range(len(longueurs)):
+        L_Matrix += [[Lmax_initial[j]]]
+        L_Matrix[j] += L_max
+
+    # Output: choix des lignes
+    R = []
+    X = []
+    CAPEX = []
+    Lmax = []
+
+    choix_list = []
+    for i in range(len(choix)):
+        choix_list += [int(choix[i])]
+
+    # updated_catalogue = [0,4,5,6]
+    for i in range(len(r_list)):
+        # for i in updated_catalogue:
+        R += [r_list[i][choix_list[i]]]
+        X += [x_list[i][choix_list[i]]]
+        CAPEX += [prix_tot[i][choix_list[i]]]
+        Lmax += [L_Matrix[i][choix_list[i]]]
+    return R, X, Lmax, CAPEX
 
 
 def natural_sort_key(s):
@@ -170,7 +260,7 @@ def joule_from_df(df, x):
     setT = range(24)
     Cost_joules = 0.1
     i_act = 0.035
-    R, X, Lmax, CAPEX = catalogue(x)
+    R, X, Lmax, CAPEX = reinforcement_details(x)
     daily_J_losses = sum(df[f"I_squared[{i}]"][t] * R[i]
                          for i in range(len(R)) for t in setT)
     J_cost_total = daily_J_losses * Cost_joules * 365 * 30000
@@ -232,7 +322,7 @@ def co2_from_df(df):
 
 
 def capex_from_x(x):
-    R, X, Lmax, CAPEX = catalogue(x)
+    R, X, Lmax, CAPEX = reinforcement_details(x)
     return (sum(CAPEX))
 
 

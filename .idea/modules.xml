@@ -2,7 +2,6 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/../Bi-level MES reinforcement tool/.idea/Bi-level MES reinforcement tool.iml" filepath="$PROJECT_DIR$/../Bi-level MES reinforcement tool/.idea/Bi-level MES reinforcement tool.iml" />
       <module fileurl="file://$PROJECT_DIR$/.idea/mylib.iml" filepath="$PROJECT_DIR$/.idea/mylib.iml" />
     </modules>
   </component>
